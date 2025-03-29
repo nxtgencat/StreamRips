@@ -1,4 +1,4 @@
-FROM node:23-alpine
+FROM node:23-bullseye
 
 # Set timezone
 ENV TZ="Asia/Kolkata"
@@ -18,10 +18,8 @@ RUN curl -fsSL https://brave-browser-apt-release.s3.brave.com/brave-core.asc | g
     && apt-get install -y brave-browser --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-
 # Set working directory
 WORKDIR /app
-
 
 # Copy package files and install dependencies
 COPY package*.json ./
