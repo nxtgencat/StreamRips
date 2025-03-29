@@ -16,7 +16,7 @@ async function launchBrowser() {
         : "/usr/bin/brave-browser";
     return await puppeteer.launch({
         executablePath: executablePath,
-        headless: false,
+        headless: "new",
         args : [
             // Brave specific
             "--enable-features=Brave",
