@@ -8,7 +8,6 @@
   },
   "private": true,
   "dependencies": {
-    "adm-zip": "^0.5.16",
     "date-fns": "^4.1.0",
     "express": "^4.21.2",
     "puppeteer": "^24.4.0",

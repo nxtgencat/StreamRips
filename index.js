@@ -1,67 +1,43 @@
 import express from "express";
 import puppeteer from "puppeteer";
-import AdmZip from "adm-zip";
 import {logger} from "./logger.js";
-import path from "node:path";
-
-const ZIP_FILE = path.resolve("./AdGuard.zip");
-const EXTENSION_PATH = path.resolve("./AdGuard");
-
-
-function extractZIP() {
-    try {
-        const zip = new AdmZip(ZIP_FILE);
-        zip.extractAllTo(EXTENSION_PATH, true);
-        console.log("Extension extracted successfully!");
-    } catch (error) {
-        console.error(`Error extracting ZIP: ${error.message}`);
-    }
-}
 
 let browser; // Global persistent browser instance
 
-// Launch browser with extension and wait until the extension is loaded
-async function launchBrowserWithExtension() {
-    await extractZIP();
+// Launch browser
+async function launchBrowser() {
+    logger.info("Launching Brave browser...");
+    return await puppeteer.launch({
+        // executablePath: "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+        executablePath: "/usr/bin/brave-browser",
+        headless: "new",
+        args : [
+            // Brave specific
+            "--enable-features=Brave",
+            "--brave-adblock-p3a-enabled=false",
 
-    logger.info("Launching browser with extension...");
-    const browser = await puppeteer.launch({
-        headless: "new", // Running in headless mode
-        executablePath: "/usr/bin/chromium-browser",
-        args: [
-            `--disable-extensions-except=${EXTENSION_PATH}`,
-            `--load-extension=${EXTENSION_PATH}`,
+            // Anti-detection
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=TranslateUI",
+
+            // Media handling
+            "--autoplay-policy=no-user-gesture-required",
+            "--use-fake-ui-for-media-stream",
+
+            // Performance
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+
+            // Security/sandbox (use cautiously)
             "--no-sandbox",
             "--disable-setuid-sandbox",
+
+            // Additional helpful flags
+            "--disable-notifications",
+            "--disable-infobars"
         ],
-    });
 
-    logger.info("Waiting for extension to load...");
-    return new Promise(async (resolve) => {
-        let timeoutId;
-        const checkInterval = setInterval(async () => {
-            const pages = await browser.pages();
-            for (const page of pages) {
-                const url = page.url();
-                const title = await page.title();
-                if (
-                    title.includes("Thank you for installing AdGuard") ||
-                    url.includes("welcome.adguard.com/v2/thankyou.html")
-                ) {
-                    clearInterval(checkInterval);
-                    clearTimeout(timeoutId);
-                    logger.info("AdGuard extension fully loaded!");
-                    resolve(browser);
-                    return;
-                }
-            }
-        }, 1000);
-
-        timeoutId = setTimeout(() => {
-            clearInterval(checkInterval);
-            logger.info("Extension loading timeout reached, proceeding anyway");
-            resolve(browser);
-        }, 30000);
     });
 }
 
@@ -69,17 +45,13 @@ async function launchBrowserWithExtension() {
 async function extractVideoDetails(videoUrl) {
     const page = await browser.newPage();
 
-    // Use a realistic user agent
-    const userAgent =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36";
-    logger.info("Setting realistic user agent...");
+    const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.5005.63 Safari/537.36";
     await page.setUserAgent(userAgent);
     await page.setViewport({ width: 1920, height: 1080 });
 
     let videoDirectUrl = null;
     const capturedUrls = new Set();
 
-    // Listen to network responses to capture the video URL
     page.on("response", async (response) => {
         const url = response.url();
         if (url.includes(".mp4") && !capturedUrls.has(url)) {
@@ -91,10 +63,7 @@ async function extractVideoDetails(videoUrl) {
 
     logger.info(`Opening video page: ${videoUrl}`);
     await page.goto(videoUrl, { waitUntil: "networkidle2" });
-    logger.info("Page loaded successfully");
 
-    // Try to trigger video play by interacting with the page
-    logger.info("Looking for video element...");
     const playResult = await page.evaluate(() => {
         const clickElement = (element) => {
             if (!element) return false;
@@ -111,51 +80,25 @@ async function extractVideoDetails(videoUrl) {
         };
 
         const video = document.querySelector("video");
-        const videoContainer = document.querySelector(
-            ".video-container, .player-container, [id*='player']"
-        );
-        const playButtons = document.querySelectorAll(
-            '[class*="play-button"], .ytp-play-button, .play, .jw-video'
-        );
-
-        let actions = [];
+        const playButtons = document.querySelectorAll('[class*="play-button"], .ytp-play-button, .play, .jw-video');
 
         if (video) {
             clickElement(video);
-            try {
-                video.play();
-            } catch (e) {}
-            actions.push("Video element clicked and play() called");
+            try { video.play(); } catch (e) {}
         }
 
-        if (videoContainer) {
-            clickElement(videoContainer);
-            actions.push("Video container clicked");
-        }
+        playButtons.forEach((btn) => clickElement(btn));
 
-        if (playButtons.length > 0) {
-            playButtons.forEach((btn) => clickElement(btn));
-            actions.push(`${playButtons.length} play button(s) clicked`);
-        }
-
-        return {
-            actions,
-            videoSrc: video?.src || null,
-        };
+        return { videoSrc: video?.src || null };
     });
 
-    logger.info(`Video play attempts: ${playResult.actions}`);
-
-    // If a source is available from the video element
     if (playResult.videoSrc && !videoDirectUrl) {
         videoDirectUrl = playResult.videoSrc;
         logger.info(`Found video URL from video element: ${videoDirectUrl}`);
     }
 
-    logger.info("Waiting for video to load...");
     await new Promise((resolve) => setTimeout(resolve, 5000));
 
-    // If still no video URL, try extracting from the page content
     if (!videoDirectUrl) {
         const extractionResult = await page.evaluate(() => {
             const video = document.querySelector("video");
@@ -167,25 +110,11 @@ async function extractVideoDetails(videoUrl) {
                     break;
                 }
             }
-            if (!videoUrl) {
-                const scripts = document.querySelectorAll("script");
-                for (const script of scripts) {
-                    const content = script.textContent;
-                    if (content) {
-                        const match = content.match(/["'](https?:\/\/[^"']+\.mp4)["']/);
-                        if (match) {
-                            videoUrl = match[1];
-                            break;
-                        }
-                    }
-                }
-            }
             return { videoUrl };
         });
 
         if (extractionResult.videoUrl) {
             videoDirectUrl = extractionResult.videoUrl;
-            logger.info(`Found video URL from page content: ${videoDirectUrl}`);
         }
     }
 
@@ -194,16 +123,11 @@ async function extractVideoDetails(videoUrl) {
         throw new Error("Could not find video URL");
     }
 
-    logger.info("Extracting cookies...");
     const cookies = await page.cookies();
     const cookieString = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
-    logger.info(`Found ${cookies.length} cookies`);
-
     const referer = page.url();
-
     await page.close();
 
-    // Return all details as a single object
     return {
         userAgent,
         cookie: cookieString,
@@ -216,7 +140,6 @@ async function extractVideoDetails(videoUrl) {
 const app = express();
 app.use(express.json());
 
-// Endpoint for the client to send a video URL and receive the headers and download URL
 app.post("/getvideo", async (req, res) => {
     const { videoUrl } = req.body;
     if (!videoUrl) {
@@ -231,9 +154,8 @@ app.post("/getvideo", async (req, res) => {
     }
 });
 
-// Start the server after launching the browser
 const PORT = process.env.PORT || 3000;
-launchBrowserWithExtension()
+launchBrowser()
     .then((launchedBrowser) => {
         browser = launchedBrowser;
         app.listen(PORT, () => {
